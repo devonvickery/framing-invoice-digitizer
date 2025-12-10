@@ -1,0 +1,180 @@
+{
+  "name": "invoice_ocr_flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "receive-invoice",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f5051bdf-de0e-4fa5-a6a3-3de0b4b6c00c",
+      "name": "Webhook",
+      "webhookId": "bf180c36-7672-4093-8e2b-71b2f759675c"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ocr.space/parse/image",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "helloworld"
+            },
+            {
+              "name": "url",
+              "value": "={{$json[\"body\"][\"image_url\"]}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        208,
+        0
+      ],
+      "id": "193dcf46-1725-41ed-930c-ccd32ca2e0ac",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4476a589-54f3-4f6a-96e5-62bf0922e1f9",
+              "name": "ocrText",
+              "value": "={{$json[\"ParsedResults\"][0][\"ParsedText\"]}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        416,
+        0
+      ],
+      "id": "74fbb13f-1f70-42a7-80d2-681d4dd58688",
+      "name": "Extract Invoice Data"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const text = $json.ocrText || \"\";\nconst lines = text.split(/\\n/).map(line => line.trim()).filter(line => line);\n\n// Format dates\nfunction normalizeDate(dateStr) {\n  if (!dateStr) return null;\n\n  const mdY = dateStr.match(/(\\d{1,2})[\\/'-](\\d{1,2})[\\/'-](\\d{2,4})/);\n  if (mdY) {\n    let [_, m, d, y] = mdY;\n    if (y.length === 2) y = \"20\" + y;\n    return `${y.padStart(4, \"0\")}-${m.padStart(2, \"0\")}-${d.padStart(2, \"0\")}`;\n  }\n\n  const long = dateStr.match(/([A-Za-z]+)\\s+(\\d{1,2}),?\\s+(\\d{2,4})/);\n  if (long) {\n    const[_, monthName, d, y] = long;\n    const monthIndex = new Date(`${monthName} 1, 2000`).getMonth() + 1;\n    return `${y.padStart(4, \"0\")}-${String(monthIndex).padStart(2, \"0\")}-${d.padStart(2, \"0\")}`;\n  }\n\n  return null;\n}\n\n// VENDOR: Look at first few lines, Return first line that looks like a company name.\nconst VENDOR_LINE_SCAN_LIMIT = 5;\nlet vendor = null;\nfor (let line of lines.slice(0, VENDOR_LINE_SCAN_LIMIT)) {\n  if (!line.match(/(Invoice|Order|Ship To|Bill To|\\d)/i)) {\n    vendor = line;\n    break;\n  }\n}\n\n//AMOUNT: Look for line with largest $ amount.\nlet maxAmount = 0;\nlines.forEach(line => {\n  const matches = line.match(/[$S]([0-9,.]+)/g);\n  if (matches) {\n    matches.forEach(val => {\n      const num = parseFloat(val.replace(/[^0-9.]/g, \"\"));\n      if (num > maxAmount) maxAmount = num;\n    });\n  }\n});\nconst amount = maxAmount > 0 ? parseFloat(maxAmount.toFixed(2)) : null;\n\n//DATE: Find first date, check multiple formats\nlet date = null;\nconst dateRegexes = [\n  /(\\d{1,2}[\\/'-]\\d{1,2}[\\/'-]\\d{2,4})/, // 5/12/24, 5-12-2024, 5'12'24\n  /([A-Za-z]+ \\d{1,2},? \\d{2,4})/        // May 12, 2024  \n]\nfor (const regex of dateRegexes) {\n  const match = text.match(regex);\n  if (match) {\n    date = normalizeDate(match[1]);\n    break;\n  }\n}\n\nreturn {\n  json: {\n    vendor: vendor || \"not found\",\n    amount: amount || \"not found\",\n    date: date || \"not found\",\n    raw: text\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "4c79f899-b6e0-4fca-8dfb-aaf62f52d66a",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/invoices",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "vendor",
+              "value": "={{$json.vendor}}"
+            },
+            {
+              "name": "amount",
+              "value": "={{$json.amount}}"
+            },
+            {
+              "name": "date",
+              "value": "={{$json.date}}"
+            },
+            {
+              "name": "raw",
+              "value": "={{$json.raw}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        832,
+        0
+      ],
+      "id": "81396e76-1028-414e-8d6c-a1a35ece0a70",
+      "name": "Send to Backend"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Extract Invoice Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Invoice Data": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4bee9684-a229-4722-b391-2e135b12e05e",
+  "meta": {
+    "instanceId": "4ec5ce65af0c7a66b42b9c0f95563c74fd8f1a0888eb404536af3b4bcaa9d381"
+  },
+  "id": "pT4SpWpx8W5ACtdN",
+  "tags": []
+}
